@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
-# Importações de dependências (Assegure que QuestionBase esteja em db.schemas)
+# Importações de dependências
 from .embedding_model import embedding_model
 from db.sql_db import SessionLocal
 from db.schemas import QuestionModel, QuestionTopic, QuestionBase 
@@ -49,8 +49,25 @@ class QuestionService:
             if count_result.count == 0:
                 print("--- Iniciando Carga de Dados Iniciais de data/initial_enem_data.json ---")
                 load_initial_data(self) 
+            else:
+                print(f"--- Qdrant já contém {count_result.count} questões. Pulando carga inicial. ---")
+
         except Exception as e:
+            # Ignora o erro se a coleção ainda não existe
             pass
+
+    # ⬇️ NOVO MÉTODO PARA VERIFICAR A CONTAGEM
+    def get_collection_count(self) -> int:
+        """Retorna o número exato de pontos (questões) na coleção Qdrant."""
+        try:
+            count_result = self.qdrant_client.count(
+                collection_name=self.collection_name, 
+                exact=True
+            )
+            return count_result.count
+        except Exception:
+            return 0
+    # ⬆️ FIM DO NOVO MÉTODO
 
     def _persist_question_and_vector(self, question_data: dict, vector: List[float]):
         """Salva a questão no SQL e insere o vetor no Qdrant."""
@@ -84,20 +101,12 @@ class QuestionService:
             ],
             wait=True
         )
-        
-    # ⬇️ NOVO MÉTODO PARA ADICIONAR UMA ÚNICA QUESTÃO VIA POST
+
     def add_single_question(self, question: QuestionBase):
         """Gera o embedding e persiste uma única questão no SQL e Qdrant."""
         
-        # 1. Converter QuestionBase (Pydantic) para dicionário
-        # O método .model_dump() é preferido em versões mais recentes do Pydantic, 
-        # mas .dict() funciona em muitas versões
         question_data = question.dict()
-        
-        # 2. Gerar vetor
         vector = embedding_model.generate_embedding(question_data['text'])
-        
-        # 3. Persistir (reutilizando a lógica existente)
         self._persist_question_and_vector(
             question_data=question_data, 
             vector=vector
@@ -107,8 +116,12 @@ class QuestionService:
         """
         Gera o embedding para o tópico (query) e busca questões similares no Qdrant.
         """
-        query_vector = embedding_model.generate_embedding(topic)
-
+        try:
+            query_vector = embedding_model.generate_embedding(topic)
+        except Exception as e:
+            print(f"ERRO CRÍTICO ao gerar embedding para a busca: {e}")
+            raise # Re-lança a exceção para que o FastAPI retorne 500
+        
         try:
             search_result = self.qdrant_client.search(
                 collection_name=self.collection_name,
@@ -133,5 +146,5 @@ class QuestionService:
             return results
             
         except Exception as e:
-            print(f"ERRO CRÍTICO no search_questions: {e}")
+            print(f"ERRO CRÍTICO no search_questions (Qdrant Search): {e}")
             raise Exception("Erro interno do servidor ao processar a busca no banco de dados vetorial.")

@@ -2,11 +2,11 @@
 
 import os
 from fastapi import FastAPI, Depends, HTTPException, status
-from typing import List
+from typing import List, Dict, Any
 
 # Importações de Serviços e Modelos
 from core.question_service import QuestionService
-from db.schemas import QuestionSearch, QuestionTopic, QuestionBase # Importado QuestionBase para o POST
+from db.schemas import QuestionSearch, QuestionTopic, QuestionBase 
 from qdrant_client import QdrantClient
 
 # Verifica a chave de API
@@ -39,6 +39,21 @@ def read_root():
     """Endpoint raiz para verificar o status da API (Health Check)."""
     return {"message": "API de Busca ENEM operacional."}
 
+# ⬇️ NOVO ENDPOINT DE STATUS E CONTAGEM
+@app.get("/status/count", tags=["Status"], response_model=Dict[str, Any])
+def get_collection_count_endpoint(
+    service: QuestionService = Depends(lambda: question_service)
+):
+    """
+    Retorna o número atual de questões indexadas no Qdrant.
+    
+    Use este endpoint após a inicialização para verificar se o carregamento
+    dos dados iniciais foi bem-sucedido.
+    """
+    count = service.get_collection_count()
+    return {"collection_name": service.collection_name, "count": count}
+# ⬆️ FIM DO NOVO ENDPOINT
+
 @app.get("/questions", tags=["Questions"], response_model=List[QuestionTopic])
 def search_questions_endpoint(
     topic: str, 
@@ -47,10 +62,6 @@ def search_questions_endpoint(
 ):
     """
     Busca questões do ENEM por similaridade semântica (RAG).
-    
-    Args:
-        topic (str): O tópico ou pergunta para buscar.
-        amount (int): O número de questões a retornar.
     """
     if not topic:
         raise HTTPException(
@@ -69,7 +80,6 @@ def search_questions_endpoint(
             detail="Erro interno do servidor ao processar a requisição."
         )
 
-# ⬇️ NOVO ENDPOINT PARA CRIAÇÃO DE QUESTÕES
 @app.post("/questions", tags=["Questions"], status_code=status.HTTP_201_CREATED)
 def add_new_question_endpoint(
     question_data: QuestionBase,
@@ -77,9 +87,6 @@ def add_new_question_endpoint(
 ):
     """
     Insere uma nova questão no banco de dados SQL e no índice vetorial Qdrant.
-    
-    O corpo da requisição (body) deve conter os campos: text, area, 
-    alternatives (lista de strings) e correct_answer.
     """
     try:
         service.add_single_question(question_data)
