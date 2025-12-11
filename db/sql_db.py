@@ -1,33 +1,33 @@
 # db/sql_db.py
-from sqlalchemy import create_engine, Column, String, Text
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.dialects.sqlite import JSON
 
-# Configuração do DB (usando SQLite local para facilidade)
-DATABASE_URL = "sqlite:///./questions.db"
-# Conexão: connect_args={"check_same_thread": False} é necessário para SQLite/FastAPI
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
+
+# ----------------------------------------------------
+# 1. CONFIGURAÇÃO DO ENGINE
+# ----------------------------------------------------
+
+# Defina o Engine (o arquivo .db)
+SQLALCHEMY_DATABASE_URL = "sqlite:///./sql_app.db"
+engine = create_engine(
+    # check_same_thread=False é necessário apenas para SQLite, 
+    # permitindo múltiplos threads (FastAPI) acessarem a mesma conexão.
+    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+)
+
+# ----------------------------------------------------
+# 2. BASE E MAPEAMENTO
+# ----------------------------------------------------
+
+# Defina a Base para os modelos
 Base = declarative_base()
+from . import schemas
 
-class QuestionModel(Base):
-    __tablename__ = "questions"
+# ----------------------------------------------------
+# 3. CRIAÇÃO DE TABELAS E SESSÃO
+# ----------------------------------------------------
 
-    id = Column(String, primary_key=True, index=True) 
-    statement = Column(Text, nullable=False)
-    alternatives = Column(JSON, nullable=False) 
-    correct_answer = Column(String(1), nullable=False)
-    topic = Column(String, index=True)
-    source = Column(String)
 
-def init_db():
-    """Cria as tabelas no banco de dados se elas não existirem."""
-    Base.metadata.create_all(bind=engine)
-    print("Database tables initialized (SQLite).")
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Defina o SessionLocal
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
