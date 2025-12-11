@@ -1,20 +1,26 @@
-# core/embedding_model.py
+# core/embedding_model.py (VERSÃO PARA langchain_google_genai - Importação Forçada)
 from typing import List
-from google import genai
-from google.genai.errors import APIError
+import os
+# ⬇️ CHAVE DA CORREÇÃO: Força a importação do submódulo 'embeddings' com o nome completo
+from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings 
 
-EMBEDDING_MODEL = 'text-embedding-004' 
+# O modelo de embedding deve ser chamado com o prefixo 'models/'
+EMBEDDING_MODEL = 'models/text-embedding-004' 
 EMBEDDING_SIZE = 768 
 
 class EmbeddingModel:
-    """Responsável por gerar vetores (embeddings) a partir de texto."""
+    """Responsável por gerar vetores (embeddings) a partir de texto usando LangChain/Gemini."""
     
     def __init__(self):
-        try:
-            self.client = genai.Client()
-        except Exception as e:
-            print(f"ERRO: Cliente GenAI não pôde ser inicializado. Verifique GEMINI_API_KEY. {e}")
-            raise
+        self.EMBEDDING_SIZE = 768
+        # A chave GEMINI_API_KEY deve ser setada como variável de ambiente
+        if not os.getenv("GEMINI_API_KEY"):
+            print("ERRO: Variável GEMINI_API_KEY não está definida.")
+
+        # Cria o objeto de embedding
+        self.embed_function = GoogleGenerativeAIEmbeddings(
+            model=EMBEDDING_MODEL,
+        )
 
     def generate_embedding(self, text: str) -> List[float]:
         """Gera um embedding (vetor) para um dado texto."""
@@ -22,14 +28,12 @@ class EmbeddingModel:
             return [0.0] * EMBEDDING_SIZE
             
         try:
-            result = self.client.models.embed_content(
-                model=EMBEDDING_MODEL,
-                content=text,
-                task_type="RETRIEVAL_DOCUMENT"
-            )
-            return result['embedding']
-        except APIError as e:
-            print(f"Erro na geração de embedding: {e}")
-            raise
+            # Usa o método embed_query
+            embedding_vector = self.embed_function.embed_query(text)
+            
+            return embedding_vector
+            
+        except Exception as e:
+             raise Exception(f"Falha de API no LangChain/Gemini. Verifique sua chave. {type(e).__name__}: {e}")
 
 embedding_model = EmbeddingModel()

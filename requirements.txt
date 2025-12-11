@@ -4,7 +4,7 @@ pydantic
 pydantic-settings
 numpy
 # Dependências do LLM/Vector DB
-google-genai
+#google-genai
 qdrant-client
 # Dependência do DB Principal (SQLite via SQLAlchemy)
 SQLAlchemy

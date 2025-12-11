@@ -1,70 +1,92 @@
 # api/main.py
-from fastapi import FastAPI, HTTPException
-from api.models import QuestionIn, QuestionOut
+
+import os
+from fastapi import FastAPI, Depends, HTTPException, status
+from typing import List
+
+# Importações de Serviços e Modelos
 from core.question_service import QuestionService
-from db.sql_db import init_db 
-from db.init_db import load_initial_data
+from db.schemas import QuestionSearch, QuestionTopic, QuestionBase # Importado QuestionBase para o POST
+from qdrant_client import QdrantClient
 
-# --- Etapas de Inicialização ---
+# Verifica a chave de API
+if not os.getenv("GEMINI_API_KEY"):
+    print("AVISO CRÍTICO: Variável de ambiente GEMINI_API_KEY não está definida.")
 
-# 1. Inicializa o banco de dados SQL (cria o arquivo questions.db)
-init_db() 
+# ----------------------------------------------------
+# 1. INICIALIZAÇÃO DOS CLIENTES E SERVIÇOS
+# ----------------------------------------------------
 
-# 2. Inicializa o serviço (que inicia as conexões com Qdrant/Gemini)
-question_service = QuestionService()
+# Cria o cliente Qdrant In-Memory
+qdrant_client = QdrantClient(":memory:")
 
-# 3. Carga Inicial de Dados (popula o Qdrant In-Memory e o SQLite)
-load_initial_data(question_service, "data/initial_enem_data.json")
+# Inicializa o QuestionService, passando o cliente Qdrant
+question_service = QuestionService(qdrant_client=qdrant_client)
 
-# --- Aplicação FastAPI ---
-
+# Inicialização da Aplicação FastAPI
 app = FastAPI(
-    title="ENEM Question Recommendation & Generation Service",
-    description="Backend para recuperar, gerar e gerenciar questões ENEM-style.",
+    title="Teachy ENEM RAG API",
+    description="API de Busca por Similaridade Semântica de Questões do ENEM.",
     version="1.0.0"
 )
 
-# Endpoint para a recomendação/geração
-@app.get(
-    "/questions", 
-    response_model=List[QuestionOut], 
-    summary="Busca ou Gera Questões ENEM Relevantes"
-)
-async def get_questions(topic: str, amount: int):
+# ----------------------------------------------------
+# 2. ENDPOINTS DA API
+# ----------------------------------------------------
+
+@app.get("/", tags=["Root"])
+def read_root():
+    """Endpoint raiz para verificar o status da API (Health Check)."""
+    return {"message": "API de Busca ENEM operacional."}
+
+@app.get("/questions", tags=["Questions"], response_model=List[QuestionTopic])
+def search_questions_endpoint(
+    topic: str, 
+    amount: int = 5,
+    service: QuestionService = Depends(lambda: question_service)
+):
     """
-    Retorna uma lista de questões ENEM (máx. 15). 
-    Prefere questões existentes, gera novas se necessário.
+    Busca questões do ENEM por similaridade semântica (RAG).
+    
+    Args:
+        topic (str): O tópico ou pergunta para buscar.
+        amount (int): O número de questões a retornar.
     """
-    if not 1 <= amount <= 15:
-        raise HTTPException(status_code=400, detail="O parâmetro 'amount' deve estar entre 1 e 15.")
-    
-    if not topic or len(topic.strip()) < 3:
-        raise HTTPException(status_code=400, detail="O parâmetro 'topic' deve ser especificado.")
-    
+    if not topic:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O parâmetro 'topic' não pode ser vazio."
+        )
+
     try:
-        questions = question_service.get_or_generate_questions(topic, amount)
-        if not questions:
-             raise HTTPException(status_code=503, detail="Não foi possível recuperar ou gerar questões.")
-             
-        return questions
+        results = service.search_questions(topic=topic, amount=amount)
+        return results
+
     except Exception as e:
         print(f"ERRO CRÍTICO no GET /questions: {e}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor ao processar a requisição.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro interno do servidor ao processar a requisição."
+        )
 
-
-# Endpoint para upload manual
-@app.post(
-    "/questions", 
-    status_code=201, 
-    summary="Upload Manual de Nova Questão"
-)
-async def upload_question(question: QuestionIn):
+# ⬇️ NOVO ENDPOINT PARA CRIAÇÃO DE QUESTÕES
+@app.post("/questions", tags=["Questions"], status_code=status.HTTP_201_CREATED)
+def add_new_question_endpoint(
+    question_data: QuestionBase,
+    service: QuestionService = Depends(lambda: question_service)
+):
     """
-    Permite o upload manual de uma nova questão ENEM, que é automaticamente indexada.
+    Insere uma nova questão no banco de dados SQL e no índice vetorial Qdrant.
+    
+    O corpo da requisição (body) deve conter os campos: text, area, 
+    alternatives (lista de strings) e correct_answer.
     """
     try:
-        new_question = question_service.persist_new_question(question)
-        return {"message": "Questão enviada e indexada com sucesso.", "id": new_question.id}
+        service.add_single_question(question_data)
+        return {"message": "Questão inserida com sucesso."}
     except Exception as e:
         print(f"ERRO CRÍTICO no POST /questions: {e}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor ao processar o upload.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro interno do servidor ao inserir a questão."
+        )
