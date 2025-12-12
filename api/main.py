@@ -14,7 +14,7 @@ if not os.getenv("GEMINI_API_KEY"):
     print("AVISO CRÍTICO: Variável de ambiente GEMINI_API_KEY não está definida.")
 
 # ----------------------------------------------------
-# 1. INICIALIZAÇÃO DOS CLIENTES E SERVIÇOS (DIRETA E CENTRALIZADA)
+# 1. INICIALIZAÇÃO DOS CLIENTES E SERVIÇOS 
 # ----------------------------------------------------
 
 # Cria o cliente Qdrant In-Memory
@@ -52,10 +52,15 @@ def get_collection_count_endpoint(
 @app.get("/questions", tags=["Questions"], response_model=List[QuestionTopic])
 def search_questions_endpoint(
     topic: str, 
-    amount: int = 5,
+    amount: int = 15, # <--- NOVO PADRÃO: 15
     service: QuestionService = Depends(get_question_service)
 ):
     """Busca questões do ENEM por similaridade semântica (RAG)."""
+    
+    # Guardrail: Limita o máximo que o usuário pode pedir
+    if amount > 25:
+        amount = 25 
+        
     if not topic:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

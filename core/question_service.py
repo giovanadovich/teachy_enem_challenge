@@ -4,6 +4,7 @@ import json
 import os 
 from typing import List, Dict, Any, Optional
 
+# Se você migrar para LangChain, substitua as importações Qdrant e embedding_model
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 
@@ -21,7 +22,7 @@ class QuestionService:
         self.qdrant_client = qdrant_client
         self.collection_name = "enem_questions"
         
-        # NOTE: A importação de 'Base' (do sql_db) garante que os modelos sejam conhecidos.
+        # Sequência de Inicialização Forçada
         Base.metadata.create_all(bind=engine)
         
         self._init_qdrant_collection()
@@ -66,9 +67,8 @@ class QuestionService:
         """
         alternatives_text = " ".join(alternatives)
         return (
-            f"Tópico: {topic}. "
-            f"Enunciado da Questão: {statement}. "
-            f"Alternativas para Contexto: {alternatives_text}"
+            f"QUESTÃO - ÁREA {topic.upper()}: {statement}. "
+            f"Detalhes: {alternatives_text}"
         )
 
     def _load_initial_data(self): 
@@ -99,6 +99,7 @@ class QuestionService:
                 if not alternatives or any(alt is None for alt in alternatives):
                     continue
                 
+                # ⬇️ APLICAÇÃO DO CONTEXT STACKING
                 context_string = self._get_vector_context(
                     statement=item['statement'],
                     topic=item['topic'],
@@ -126,6 +127,7 @@ class QuestionService:
     def get_collection_count(self) -> int:
         """Retorna o número exato de pontos (questões) na coleção Qdrant."""
         try:
+            # Usando count() para verificar o número de itens
             count_result = self.qdrant_client.count(
                 collection_name=self.collection_name, 
                 exact=True
@@ -150,8 +152,10 @@ class QuestionService:
             db.refresh(new_question)
             question_id = new_question.id
 
+        # 2. Inserir no Qdrant
         payload = question_data.copy()
         payload['id'] = question_id
+        # Garante que as alternativas sejam strings JSON no payload do Qdrant
         payload['alternatives'] = json.dumps(payload['alternatives']) 
         
         self.qdrant_client.upsert(
@@ -171,6 +175,7 @@ class QuestionService:
         
         question_data = question.dict()
         
+        # ⬇️ APLICAÇÃO DO CONTEXT STACKING para novas questões
         context_string = self._get_vector_context(
             statement=question_data['statement'],
             topic=question_data['topic'],
@@ -183,19 +188,21 @@ class QuestionService:
             vector=vector
         )
 
-    def search_questions(self, topic: str, amount: int = 5) -> List[Dict[str, Any]]:
+    def search_questions(self, topic: str, amount: int = 15) -> List[Dict[str, Any]]:
         """
         Busca questões similares no Qdrant. 
         O parâmetro 'topic' do FastAPI agora é usado como query de busca.
         """
         
-        # 1. Geração do vetor de consulta (apenas do texto de busca)
+        # 1. ⬇️ ENRIQUECIMENTO DA QUERY: Adicionar contexto na busca
         try:
-            query_vector = embedding_model.generate_embedding(topic)
+            enriched_query_text = f"Questão do ENEM na área de {topic}"
+            query_vector = embedding_model.generate_embedding(enriched_query_text)
         except Exception as e:
             print(f"ERRO CRÍTICO ao gerar embedding para a busca: {e}")
             raise 
         
+        # 2. APLICAÇÃO DO PAYLOAD FILTERING (Filtragem Estrutural)
         search_filter: Optional[Filter] = None
         TARGET_TOPICS = ["linguagens", "ciencias-natureza", "ciencias-humanas", "matematica"]
         
@@ -204,14 +211,15 @@ class QuestionService:
             search_filter = Filter(
                 must=[
                     FieldCondition(
-                        key="topic", # Campo do payload onde está a disciplina
+                        key="topic", 
                         match=MatchValue(value=topic.lower())
                     )
                 ]
             )
             
         try:
-            search_result = self.qdrant_client.search(
+            # ⬇️ Usando search_points para compatibilidade com a versão 1.9.0 do Qdrant
+            search_result = self.qdrant_client.search( 
                 collection_name=self.collection_name,
                 query_vector=query_vector,
                 query_filter=search_filter, # Aplica o filtro

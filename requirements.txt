@@ -1,11 +1,22 @@
+# Framework da API
 fastapi
-uvicorn
+uvicorn[standard]
+
+# Google GenAI (Se for usar LangChain)
+langchain-core
+langchain-google-genai
+
+# Banco de Dados e ORM
+sqlalchemy
 pydantic
-pydantic-settings
-numpy
-# Dependências do LLM/Vector DB
-#google-genai
-qdrant-client
-# Dependência do DB Principal (SQLite via SQLAlchemy)
-SQLAlchemy
+
+# Banco de Dados Vetorial (Versão Fixa para garantir o método 'search_points')
+qdrant-client==1.9.0
+
+# Ferramentas de Processamento de Dados
+requests
 tqdm
+
+# Utilidades Python
+typing-extensions
+python-dotenv
