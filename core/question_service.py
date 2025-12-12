@@ -1,15 +1,14 @@
 # core/question_service.py
 
 import json
-import os # Necessário para o método interno _load_initial_data
-from typing import List, Dict, Any
+import os 
+from typing import List, Dict, Any, Optional
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 
 # Importações de dependências
 from .embedding_model import embedding_model
-# Importa o motor do banco de dados (Base e engine) para forçar o mapeamento
 from db.sql_db import SessionLocal, Base, engine 
 from db.schemas import QuestionModel, QuestionTopic, QuestionBase 
 
@@ -21,21 +20,12 @@ class QuestionService:
     def __init__(self, qdrant_client: QdrantClient):
         self.qdrant_client = qdrant_client
         self.collection_name = "enem_questions"
+        
+        # NOTE: A importação de 'Base' (do sql_db) garante que os modelos sejam conhecidos.
         Base.metadata.create_all(bind=engine)
-        # ⬇️ CHAVE: Sequência de Inicialização Forçada
-        self._init_sql_db()
+        
         self._init_qdrant_collection()
         self._check_and_load_data()
-
-    def _init_sql_db(self):
-        """Força o mapeamento do SQLAlchemy e a criação de tabelas."""
-        print("DEBUG QS: Forçando mapeamento e criação de tabelas SQL.")
-        try:
-            # Garante que as classes sejam mapeadas e cria as tabelas
-            Base.metadata.create_all(bind=engine)
-        except Exception as e:
-            print(f"ERRO CRÍTICO no mapeamento do SQLAlchemy: {e}")
-            raise # Interrompe a inicialização se falhar
 
     def _init_qdrant_collection(self):
         """Inicializa a coleção no Qdrant se ela não existir."""
@@ -69,11 +59,22 @@ class QuestionService:
             print(f"Erro ao verificar contagem inicial no Qdrant: {e}")
             pass
 
+    def _get_vector_context(self, statement: str, topic: str, alternatives: List[str]) -> str:
+        """
+        Gera a string de contexto completa para o embedding (Context Stacking).
+        Esta é a chave para uma busca mais precisa.
+        """
+        alternatives_text = " ".join(alternatives)
+        return (
+            f"Tópico: {topic}. "
+            f"Enunciado da Questão: {statement}. "
+            f"Alternativas para Contexto: {alternatives_text}"
+        )
+
     def _load_initial_data(self): 
         """
-        Lógica de carga inicial, agora interna ao QuestionService.
+        Lógica de carga inicial, interna ao QuestionService.
         """
-        # Define o caminho do arquivo JSON
         CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
         DATA_FILE_PATH = os.path.join(CURRENT_DIR, '..', 'data', 'initial_enem_data.json')
         
@@ -98,10 +99,14 @@ class QuestionService:
                 if not alternatives or any(alt is None for alt in alternatives):
                     continue
                 
-                print(f"DEBUG INIT: Processando item {i+1}/{total_items} - Área: {item.get('topic')}") 
+                context_string = self._get_vector_context(
+                    statement=item['statement'],
+                    topic=item['topic'],
+                    alternatives=alternatives
+                )
                 
                 # Gerar vetor
-                vector = embedding_model.generate_embedding(item['statement']) 
+                vector = embedding_model.generate_embedding(context_string) 
                 
                 # Persistir
                 self._persist_question_and_vector(
@@ -112,8 +117,7 @@ class QuestionService:
                 total_loaded += 1
                 
             except Exception as e:
-                # Captura e loga qualquer erro de persistência, mas continua o loop
-                print(f"\n[ERRO CRÍTICO NO PIPELINE] Falha na indexação do item {i+1} ({item.get('topic')}): {type(e).__name__}: {e}. Item descartado.")
+                print(f"\n[ERRO CRÍTICO NO PIPELINE] Falha na indexação do item {i+1}: {type(e).__name__}: {e}. Item descartado.")
                 continue 
 
         print("\n--- Carga Inicial Finalizada. Total de questões carregadas:", total_loaded, "---")
@@ -138,7 +142,7 @@ class QuestionService:
             new_question = QuestionModel(
                 text=question_data['statement'],
                 area=question_data['topic'],     
-                alternatives=question_data['alternatives'], # Lista direta para campo JSON/Text
+                alternatives=question_data['alternatives'], 
                 correct_answer=question_data['correct_answer']
             )
             db.add(new_question)
@@ -146,10 +150,8 @@ class QuestionService:
             db.refresh(new_question)
             question_id = new_question.id
 
-        # 2. Inserir no Qdrant
         payload = question_data.copy()
         payload['id'] = question_id
-        # Converte a lista para string JSON para o payload do Qdrant
         payload['alternatives'] = json.dumps(payload['alternatives']) 
         
         self.qdrant_client.upsert(
@@ -168,24 +170,51 @@ class QuestionService:
         """Gera o embedding e persiste uma única questão no SQL e Qdrant."""
         
         question_data = question.dict()
-        vector = embedding_model.generate_embedding(question_data['statement']) 
+        
+        context_string = self._get_vector_context(
+            statement=question_data['statement'],
+            topic=question_data['topic'],
+            alternatives=question_data['alternatives']
+        )
+        
+        vector = embedding_model.generate_embedding(context_string) 
         self._persist_question_and_vector(
             question_data=question_data, 
             vector=vector
         )
 
     def search_questions(self, topic: str, amount: int = 5) -> List[Dict[str, Any]]:
-        """Busca questões similares no Qdrant."""
+        """
+        Busca questões similares no Qdrant. 
+        O parâmetro 'topic' do FastAPI agora é usado como query de busca.
+        """
+        
+        # 1. Geração do vetor de consulta (apenas do texto de busca)
         try:
             query_vector = embedding_model.generate_embedding(topic)
         except Exception as e:
             print(f"ERRO CRÍTICO ao gerar embedding para a busca: {e}")
             raise 
         
+        search_filter: Optional[Filter] = None
+        TARGET_TOPICS = ["linguagens", "ciencias-natureza", "ciencias-humanas", "matematica"]
+        
+        if topic.lower() in TARGET_TOPICS:
+            # Se a query do usuário for um tópico exato, filtramos o índice.
+            search_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="topic", # Campo do payload onde está a disciplina
+                        match=MatchValue(value=topic.lower())
+                    )
+                ]
+            )
+            
         try:
             search_result = self.qdrant_client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
+                query_filter=search_filter, # Aplica o filtro
                 limit=amount,
                 with_payload=True,
             )

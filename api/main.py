@@ -1,7 +1,6 @@
 # api/main.py
 
 import os
-import db.schemas # Força a importação do modelo de dados
 from fastapi import FastAPI, Depends, HTTPException, status
 from typing import List, Dict, Any
 
@@ -21,7 +20,7 @@ if not os.getenv("GEMINI_API_KEY"):
 # Cria o cliente Qdrant In-Memory
 qdrant_client = QdrantClient(":memory:")
 
-# Inicializa o QuestionService. Isso DISPARA TODO O PROCESSO de DB/Qdrant/Indexação.
+# Inicializa o QuestionService. Isso dispara todo o processo de DB/Qdrant/Indexação.
 question_service = QuestionService(qdrant_client=qdrant_client)
 
 # Inicialização da Aplicação FastAPI
@@ -41,11 +40,6 @@ def get_question_service() -> QuestionService:
 # ----------------------------------------------------
 # 3. ENDPOINTS DA API
 # ----------------------------------------------------
-
-@app.get("/", tags=["Root"])
-def read_root():
-    """Endpoint raiz para verificar o status da API (Health Check)."""
-    return {"message": "API de Busca ENEM operacional."}
 
 @app.get("/status/count", tags=["Status"], response_model=Dict[str, Any])
 def get_collection_count_endpoint(

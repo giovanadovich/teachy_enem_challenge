@@ -1,10 +1,8 @@
-# core/embedding_model.py (VERSÃO PARA langchain_google_genai - Importação Forçada)
+# core/embedding_model.py
 from typing import List
 import os
-# ⬇️ CHAVE DA CORREÇÃO: Força a importação do submódulo 'embeddings' com o nome completo
 from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings 
 
-# O modelo de embedding deve ser chamado com o prefixo 'models/'
 EMBEDDING_MODEL = 'models/text-embedding-004' 
 EMBEDDING_SIZE = 768 
 
